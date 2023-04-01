@@ -151,6 +151,7 @@ void ObservationBuffer::bufferCloud(const sensor_msgs::PointCloud2& cloud)
     sensor_msgs::PointCloud2Modifier modifier(observation_cloud);
     modifier.resize(cloud_size);
     unsigned int point_count = 0;
+    unsigned int reject_count = 0;
 
     // copy over the points that are within our height bounds
     sensor_msgs::PointCloud2Iterator<float> iter_z(global_frame_cloud, "z");
@@ -164,6 +165,8 @@ void ObservationBuffer::bufferCloud(const sensor_msgs::PointCloud2& cloud)
         std::copy(iter_global, iter_global + global_frame_cloud.point_step, iter_obs);
         iter_obs += global_frame_cloud.point_step;
         ++point_count;
+      } else {
+        ++reject_count;
       }
     }
 
@@ -171,6 +174,8 @@ void ObservationBuffer::bufferCloud(const sensor_msgs::PointCloud2& cloud)
     modifier.resize(point_count);
     observation_cloud.header.stamp = cloud.header.stamp;
     observation_cloud.header.frame_id = global_frame_cloud.header.frame_id;
+
+    // ROS_INFO_STREAM("buffered " << point_count << " points, rejected " << reject_count);
   }
   catch (TransformException& ex)
   {

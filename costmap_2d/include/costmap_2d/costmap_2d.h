@@ -42,6 +42,7 @@
 #include <queue>
 #include <geometry_msgs/Point.h>
 #include <boost/thread.hpp>
+#include <ros/ros.h>
 
 namespace costmap_2d
 {
@@ -235,6 +236,7 @@ public:
 
   void setDefaultValue(unsigned char c)
   {
+    ROS_WARN_STREAM("set default " << static_cast<int>(c));
     default_value_ = c;
   }
 

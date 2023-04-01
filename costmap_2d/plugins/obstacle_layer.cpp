@@ -54,6 +54,20 @@ using costmap_2d::Observation;
 namespace costmap_2d
 {
 
+void debugCloud(const sensor_msgs::PointCloud2& cloud, const std::string text)
+{
+#if 0
+  ROS_INFO_STREAM(text << " point cloud '" << cloud.header.frame_id
+      << "', fields: " << cloud.fields.size() << ", data size " << cloud.data.size()
+      << ", w x h: " << cloud.height << " x " << cloud.width);
+#endif
+#if 0
+  for (size_t i = 0; i < cloud.fields.size(); ++i) {
+    ROS_INFO_STREAM(i << " " << cloud.fields[i].name << " " << cloud.fields[i].count);
+  }
+#endif
+}
+
 void ObstacleLayer::onInitialize()
 {
   ros::NodeHandle nh("~/" + name_), g_nh;
@@ -66,10 +80,13 @@ void ObstacleLayer::onInitialize()
   else
     default_value_ = FREE_SPACE;
 
+  ROS_INFO_STREAM("track unknown: " << track_unknown_space << ", default: " << static_cast<int>(default_value_));
+
   ObstacleLayer::matchSize();
   current_ = true;
 
   global_frame_ = layered_costmap_->getGlobalFrameID();
+  ROS_INFO_STREAM("global frame '" << global_frame_ << "'");
   double transform_tolerance;
   nh.param("transform_tolerance", transform_tolerance, 0.2);
 
@@ -102,6 +119,10 @@ void ObstacleLayer::onInitialize()
     source_node.param("clearing", clearing, false);
     source_node.param("marking", marking, true);
 
+    ROS_INFO_STREAM("min max obstacle height " << min_obstacle_height << " " << max_obstacle_height
+        << " with respect to global frame z");
+    ROS_INFO_STREAM("clearing: " << clearing << ", marking: " << marking);
+
     if (!(data_type == "PointCloud2" || data_type == "PointCloud" || data_type == "LaserScan"))
     {
       ROS_FATAL("Only topics that use point clouds or laser scans are currently supported");
@@ -116,6 +137,7 @@ void ObstacleLayer::onInitialize()
     {
       source_node.getParam(obstacle_range_param_name, obstacle_range);
     }
+    ROS_INFO_STREAM("obstacle range: " << obstacle_range);
 
     // get the raytrace range for the sensor
     double raytrace_range = 3.0;
@@ -123,6 +145,7 @@ void ObstacleLayer::onInitialize()
     {
       source_node.getParam(raytrace_range_param_name, raytrace_range);
     }
+    ROS_INFO_STREAM("raytrace range: " << raytrace_range);
 
     ROS_DEBUG("Creating an observation buffer for source %s, topic %s, frame %s", source.c_str(), topic.c_str(),
               sensor_frame.c_str());
@@ -152,6 +175,7 @@ void ObstacleLayer::onInitialize()
     {
       boost::shared_ptr < message_filters::Subscriber<sensor_msgs::LaserScan>
           > sub(new message_filters::Subscriber<sensor_msgs::LaserScan>(g_nh, topic, 50));
+      ROS_INFO_STREAM("laser scan topic: " << topic);
 
       boost::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::LaserScan> > filter(
         new tf2_ros::MessageFilter<sensor_msgs::LaserScan>(*sub, *tf_, global_frame_, 50, g_nh));
@@ -242,6 +266,7 @@ void ObstacleLayer::reconfigureCB(costmap_2d::ObstaclePluginConfig &config, uint
 void ObstacleLayer::laserScanCallback(const sensor_msgs::LaserScanConstPtr& message,
                                       const boost::shared_ptr<ObservationBuffer>& buffer)
 {
+  // ROS_INFO_STREAM("new laser scan '" << message->header.frame_id << "' " << message->ranges.size());
   // project the laser into a point cloud
   sensor_msgs::PointCloud2 cloud;
   cloud.header = message->header;
@@ -250,6 +275,7 @@ void ObstacleLayer::laserScanCallback(const sensor_msgs::LaserScanConstPtr& mess
   try
   {
     projector_.transformLaserScanToPointCloud(message->header.frame_id, *message, cloud, *tf_);
+    // projector_.transformLaserScanToPointCloud(global_frame_, *message, cloud, *tf_);
   }
   catch (tf2::TransformException &ex)
   {
@@ -262,6 +288,8 @@ void ObstacleLayer::laserScanCallback(const sensor_msgs::LaserScanConstPtr& mess
     ROS_WARN("transformLaserScanToPointCloud error, it seems the message from laser sensor is malformed. Ignore this laser scan. what(): %s", ex.what());
     return; //ignore this message
   }
+
+  debugCloud(cloud, "callback");
 
   // buffer the point cloud
   buffer->lock();
@@ -352,6 +380,7 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
 
   // get the clearing observations
   current = current && getClearingObservations(clearing_observations);
+  // ROS_INFO_STREAM("observations: " << observations.size() << " " << clearing_observations.size());
 
   // update the global current status
   current_ = current;
@@ -362,12 +391,16 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
     raytraceFreespace(clearing_observations[i], min_x, min_y, max_x, max_y);
   }
 
+  size_t count = 0;
+  size_t num = 0;
+
   // place the new obstacles into a priority queue... each with a priority of zero to begin with
-  for (std::vector<Observation>::const_iterator it = observations.begin(); it != observations.end(); ++it)
+  for (std::vector<Observation>::const_iterator it = observations.begin(); it != observations.end(); ++it, ++num)
   {
     const Observation& obs = *it;
 
     const sensor_msgs::PointCloud2& cloud = *(obs.cloud_);
+    debugCloud(cloud, "obstacles");
 
     double sq_obstacle_range = obs.obstacle_range_ * obs.obstacle_range_;
 
@@ -375,14 +408,14 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(cloud, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iter_z(cloud, "z");
 
-    for (; iter_x !=iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
+    for (size_t i = 0; iter_x !=iter_x.end(); ++iter_x, ++iter_y, ++iter_z, ++i, ++count)
     {
       double px = *iter_x, py = *iter_y, pz = *iter_z;
 
       // if the obstacle is too high or too far away from the robot we won't add it
       if (pz > max_obstacle_height_)
       {
-        ROS_DEBUG("The point is too high");
+        ROS_WARN("%lu The point is too high %f", i, pz);
         continue;
       }
 
@@ -393,7 +426,7 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
       // if the point is far enough away... we won't consider it
       if (sq_dist >= sq_obstacle_range)
       {
-        ROS_DEBUG("The point is too far away");
+        ROS_DEBUG("%lu The point is too far away %f m^2", i, sq_dist);
         continue;
       }
 
@@ -401,7 +434,7 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
       unsigned int mx, my;
       if (!worldToMap(px, py, mx, my))
       {
-        ROS_DEBUG("Computing map coords failed");
+        ROS_WARN("%lu Computing map coords failed", i);
         continue;
       }
 
@@ -410,6 +443,7 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
       touch(px, py, min_x, min_y, max_x, max_y);
     }
   }
+  // ROS_INFO_STREAM(num << ", " << count << " points processed");
 
   updateFootprint(robot_x, robot_y, robot_yaw, min_x, min_y, max_x, max_y);
 }
@@ -500,6 +534,7 @@ void ObstacleLayer::raytraceFreespace(const Observation& clearing_observation, d
   double ox = clearing_observation.origin_.x;
   double oy = clearing_observation.origin_.y;
   const sensor_msgs::PointCloud2 &cloud = *(clearing_observation.cloud_);
+  debugCloud(cloud, "raytrace");
 
   // get the map coordinates of the origin of the sensor
   unsigned int x0, y0;
@@ -523,7 +558,8 @@ void ObstacleLayer::raytraceFreespace(const Observation& clearing_observation, d
   sensor_msgs::PointCloud2ConstIterator<float> iter_x(cloud, "x");
   sensor_msgs::PointCloud2ConstIterator<float> iter_y(cloud, "y");
 
-  for (; iter_x != iter_x.end(); ++iter_x, ++iter_y)
+  size_t count = 0;
+  for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++count)
   {
     double wx = *iter_x;
     double wy = *iter_y;
@@ -575,6 +611,7 @@ void ObstacleLayer::raytraceFreespace(const Observation& clearing_observation, d
 
     updateRaytraceBounds(ox, oy, wx, wy, clearing_observation.raytrace_range_, min_x, min_y, max_x, max_y);
   }
+  // ROS_INFO_STREAM("raytrace count " << count);
 }
 
 void ObstacleLayer::activate()
