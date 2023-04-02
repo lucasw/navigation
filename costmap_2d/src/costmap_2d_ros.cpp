@@ -438,6 +438,14 @@ void Costmap2DROS::mapUpdateLoop(double frequency)
       publisher_->updateBounds(x0, xn, y0, yn);
 
       ros::Time now = ros::Time::now();
+      // allow for backwards moving time (from a looping rosbag)
+      if (last_publish_ > now) {
+        ROS_WARN_STREAM("jump back in time of " << (last_publish_ - now).toSec() << "s, resetting");
+        last_publish_ = now - publish_cycle;
+        // TODO(lucasw) there still are some left overs from previous run
+        resetLayers();
+        continue;
+      }
       if (last_publish_ + publish_cycle < now)
       {
         publisher_->publishCostmap();
