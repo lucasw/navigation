@@ -119,7 +119,9 @@ void ObstacleLayer::onInitialize()
     source_node.param("clearing", clearing, false);
     source_node.param("marking", marking, true);
 
-    ROS_INFO_STREAM("min max obstacle height " << min_obstacle_height << " " << max_obstacle_height
+    // these min/max values are not used, max_obstacle_height on a different namespace
+    // via dynamic reconfigure is used instead
+    ROS_WARN_STREAM("(unused) min max obstacle height " << min_obstacle_height << " " << max_obstacle_height
         << " with respect to global frame z");
     ROS_INFO_STREAM("clearing: " << clearing << ", marking: " << marking);
 
@@ -259,7 +261,9 @@ void ObstacleLayer::reconfigureCB(costmap_2d::ObstaclePluginConfig &config, uint
 {
   enabled_ = config.enabled;
   footprint_clearing_enabled_ = config.footprint_clearing_enabled;
+  // TODO(lucasw) the other max_obstacle_height in the per-observation source namespace is ignored
   max_obstacle_height_ = config.max_obstacle_height;
+  ROS_WARN_STREAM("max_obstacle_height overrides per-observation values: " << max_obstacle_height_);
   combination_method_ = config.combination_method;
 }
 
@@ -413,9 +417,10 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
       double px = *iter_x, py = *iter_y, pz = *iter_z;
 
       // if the obstacle is too high or too far away from the robot we won't add it
+      // TODO(lucasw) why not too low also?
       if (pz > max_obstacle_height_)
       {
-        ROS_WARN("%lu The point is too high %f", i, pz);
+        ROS_WARN_THROTTLE(2.0, "%lu The point is too high %f > %f", i, pz, max_obstacle_height_);
         continue;
       }
 
